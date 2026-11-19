@@ -26,6 +26,10 @@ Pass `--attn-implementation sdpa` to use PyTorch SDPA on CUDA.
 
 ## Ascend 910B and 910C
 
+The [Chinese 910B reproduction guide](ascend-910b-training.zh-CN.md) walks through
+the paper's Qwen3-8B initialization, target-generated corpora, three training
+epochs, five pruning and recovery cycles, and final checkpoint verification.
+
 Start from an environment with Python 3.12.16, PyTorch `2.10.0+cpu`,
 `torch_npu==2.10.0.post7`, CANN 9.2.1 and driver tools `26.1.1`.
 The PyTorch wheel supplies the framework and TorchNPU supplies the NPU device

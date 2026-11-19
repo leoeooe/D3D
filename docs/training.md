@@ -7,7 +7,7 @@ Terms used below: the **target** is the verifier model; the **draft** is the
 model being trained; an **anchor** is a token position that conditions a draft
 block.
 
-## Environment
+## CUDA environment
 
 ```bash
 python3.12 -m venv .venv
@@ -22,8 +22,61 @@ The launcher uses FlashAttention-2 by default:
 pip install flash-attn==2.8.3 --no-build-isolation
 ```
 
-Pass `--attn-implementation sdpa` to use PyTorch SDPA instead. SDPA still
-requires the GPU launcher; it is not a CPU training mode.
+Pass `--attn-implementation sdpa` to use PyTorch SDPA on CUDA.
+
+## Ascend 910B and 910C
+
+Start from an environment with Python 3.12.16, PyTorch `2.10.0+cpu`,
+`torch_npu==2.10.0.post7`, CANN 9.2.1 and driver tools `26.1.1`.
+The PyTorch wheel supplies the framework and TorchNPU supplies the NPU device
+and HCCL. Source the CANN environment for your installation. The following
+commands assume PyTorch and TorchNPU are installed in the base interpreter.
+
+```bash
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+python3.12 -m venv --system-site-packages .venv-ascend
+source .venv-ascend/bin/activate
+python -m pip install -r requirements-ascend-train.txt
+python -c 'import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.is_available())'
+```
+
+Set the checkpoint and JSONL paths from the offline training example below.
+Select the visible chip IDs reported by `npu-smi info -m`. For example, on a
+node where chips 0 and 1 are available, run:
+
+```bash
+ASCEND_RT_VISIBLE_DEVICES=0,1 PY="$(command -v python)" \
+    bash scripts/train.sh --device npu --disable-wandb
+```
+
+The launcher starts one process per listed chip. A single ID runs on one chip.
+`NPROC_PER_NODE` can select fewer ranks. Each rank binds its local index within
+that list. Training uses BF16 and PyTorch SDPA for causal AR and the explicit
+packed diffusion mask. Multi-rank training uses HCCL and FSDP2 by default.
+`--no-fsdp` selects replicated training. The output checkpoint includes the
+D3D model code and tokenizer. Both chip families use this entry point.
+
+Pruning uses the same four commands described below. Pass logical IDs such as
+`--devices npu:0 npu:1` to `select` and `choose`. For recovery:
+
+```bash
+ASCEND_RT_VISIBLE_DEVICES=0,1 PY="$(command -v python)" \
+    bash scripts/prune.sh train --nproc-per-node 2 --device npu \
+    --student "$CYCLE/pruned" --dataset "$DATA_PATH" \
+    --output-dir "$CYCLE/recovery" --max-steps 1000
+```
+
+Recovery defaults to standard AdamW on Ascend. To check an installation with
+local synthetic inputs, install pytest and run the following from the repo root.
+The tests compare causal and packed-mask logits and gradients against a CPU
+reference, perform an optimizer step, check that a projection matrix changed
+and reload the saved checkpoint.
+
+```bash
+ASCEND_RT_VISIBLE_DEVICES=0,1 python -m pytest -q tests/test_ascend_training.py
+```
+
+The device and distributed interfaces are documented by [TorchNPU](https://github.com/Ascend/pytorch).
 
 ## Training data
 
@@ -135,8 +188,9 @@ bash scripts/prune.sh choose \
 ```
 
 Recovery uses FSDP2 and the full-depth teacher recorded in the pruning
-provenance. The default optimizer is TorchAO 8-bit AdamW; use `--optimizer
-adamw` for standard AdamW. Preserve the teacher checkpoint and metadata between
+provenance. CUDA defaults to TorchAO 8-bit AdamW and Ascend defaults to
+standard AdamW. Use `--optimizer adamw` to select standard AdamW on CUDA.
+Preserve the teacher checkpoint and metadata between
 stages. Selection and pruning commands refuse to overwrite existing outputs.
 
 `choose` writes `selected_checkpoint.json` with the selected checkpoint path

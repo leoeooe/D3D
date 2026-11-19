@@ -21,6 +21,7 @@ from .common import (
 )
 from .modeling import disable_cache, evaluate_single_layer_removals, load_drafter
 from common.token_ids import checkpoint_mask_id
+from training.device import bind_device, default_device_type
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--block-size", type=int, default=16)
     parser.add_argument("--mask-token-id", type=int, default=None)
     parser.add_argument("--candidate-batch-size", type=int, default=2)
-    parser.add_argument("--devices", nargs="+", default=["cuda:0"])
+    parser.add_argument("--devices", nargs="+")
     parser.add_argument("--dtype", choices=["bf16"], default="bf16")
     parser.add_argument("--bootstrap-samples", type=int, default=10_000)
     parser.add_argument("--bootstrap-seed", type=int, default=42)
@@ -55,7 +56,7 @@ def _evaluate_shard(
     mask_token_id: int,
     candidate_batch_size: int,
 ) -> list[dict[str, Any]]:
-    device = torch.device(device_name)
+    device = bind_device(device_name)
     model = load_drafter(parent, torch_dtype(dtype)).to(device).eval()
     disable_cache(model)
     rows = []
@@ -169,6 +170,7 @@ def summarize(
 
 def main() -> None:
     args = build_parser().parse_args()
+    args.devices = args.devices or [f"{default_device_type()}:0"]
     parent = args.parent.resolve()
     args.mask_token_id = checkpoint_mask_id(parent, args.mask_token_id)
     output = args.output_dir.resolve()

@@ -221,7 +221,9 @@ D3D-1.7B → Qwen3-8B，单并发，`anchor_num=1`，block size 16，
 训练代码位于 `training/train/` 和 `training/pruning/`，包括基于 target 生成回答的离线训练、
 层选择、物理剪枝、恢复训练和恢复 checkpoint 选择。
 
-训练与原生推理使用上面通过 `requirements.txt` 安装的**同一环境**。
+昇腾 910B 和 910C 使用同一个训练入口，支持 BF16、HCCL 和多芯片 FSDP2。环境配置、启动命令与权重保存验证见[昇腾训练说明](docs/training.md#ascend-910b-and-910c)。
+
+以下 CUDA 训练示例与原生推理共用通过 `requirements.txt` 安装的环境。
 
 ```bash
 export DRAFT_MODEL=checkpoints/Qwen3-1.7B

@@ -28,6 +28,8 @@ from .losses import (
 )
 from .modeling import load_drafter, student_outputs, teacher_outputs
 from common.token_ids import checkpoint_mask_id
+from training.device import training_accelerator
+from training.train.runtime import restore_checkpoint_remote_code
 
 # Fixed coefficients used for every progressive recovery stage.
 LAMBDA_AR = 1.0
@@ -64,7 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-steps", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
-        "--optimizer", choices=["adamw8bit", "adamw"], default="adamw8bit"
+        "--device", choices=["auto", "cuda", "npu"],
+        default=os.environ.get("D3D_TRAIN_DEVICE", "auto"),
+    )
+    parser.add_argument(
+        "--optimizer", choices=["adamw8bit", "adamw"],
+        help="Defaults to AdamW on Ascend and TorchAO 8-bit AdamW on CUDA",
     )
     parser.add_argument("--fsdp-cpu-offload", action="store_true")
     return parser
@@ -87,8 +94,6 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("candidate-multiplier must be at least one")
     if args.min_lr > args.learning_rate:
         raise ValueError("min-lr cannot exceed learning-rate")
-    if args.optimizer == "adamw8bit" and args.fsdp_cpu_offload:
-        raise ValueError("adamw8bit does not support FSDP CPU parameter offload")
 
 
 def freeze_input_output_layers(model: Any) -> None:
@@ -110,7 +115,9 @@ def shard_teacher(model: Any, dtype: torch.dtype, world_size: int) -> Any:
     return model
 
 
-def build_optimizer(args: argparse.Namespace, model: Any) -> torch.optim.Optimizer:
+def build_optimizer(
+    args: argparse.Namespace, model: Any, device: torch.device,
+) -> torch.optim.Optimizer:
     parameters = [
         parameter for parameter in model.parameters() if parameter.requires_grad
     ]
@@ -119,7 +126,8 @@ def build_optimizer(args: argparse.Namespace, model: Any) -> torch.optim.Optimiz
             parameters,
             lr=args.learning_rate,
             weight_decay=args.weight_decay,
-            fused=not args.fsdp_cpu_offload,
+            fused=device.type == "cuda" and not args.fsdp_cpu_offload,
+            foreach=False,
         )
     from torchao.optim import AdamW8bit
 
@@ -236,6 +244,8 @@ def save_checkpoint(
                 max_shard_size="2GB",
             )
             tokenizer.save_pretrained(temporary)
+            # FSDP2's dynamic wrapper is not a loadable Hugging Face model.
+            restore_checkpoint_remote_code(temporary, Path(__file__).resolve().parents[1] / "model")
             shutil.copy2(
                 initial_checkpoint / "layer_prune.json",
                 temporary / "layer_prune.json",
@@ -280,7 +290,7 @@ def main() -> None:
     if position_decay is None:
         raise ValueError("The reference implementation supports block size 16 or 32")
 
-    from accelerate import Accelerator, FullyShardedDataParallelPlugin
+    from accelerate import FullyShardedDataParallelPlugin
 
     fsdp = FullyShardedDataParallelPlugin(
         fsdp_version=2,
@@ -292,7 +302,8 @@ def main() -> None:
         state_dict_type="FULL_STATE_DICT",
         activation_checkpointing=True,
     )
-    accelerator = Accelerator(
+    accelerator = training_accelerator(
+        args.device,
         mixed_precision="bf16",
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         fsdp_plugin=fsdp,
@@ -300,9 +311,11 @@ def main() -> None:
     rank = accelerator.process_index
     world_size = accelerator.num_processes
     device = accelerator.device
+    args.optimizer = args.optimizer or ("adamw" if device.type == "npu" else "adamw8bit")
+    if args.optimizer == "adamw8bit" and (device.type == "npu" or args.fsdp_cpu_offload):
+        raise ValueError("Use --optimizer adamw for Ascend training or FSDP CPU parameter offload")
     torch.manual_seed(args.seed + rank)
     random.seed(args.seed + rank)
-    torch.cuda.manual_seed_all(args.seed + rank)
 
     with dataset_path.open("rb") as stream:
         dataset_rows = sum(bool(line.strip()) for line in stream)
@@ -324,7 +337,7 @@ def main() -> None:
     student.config.use_cache = False
     student.config.mask_token_id = mask_token_id
     freeze_input_output_layers(student)
-    optimizer = build_optimizer(args, student)
+    optimizer = build_optimizer(args, student, device)
     student, optimizer = accelerator.prepare(student, optimizer)
 
     run_config = {
@@ -346,6 +359,8 @@ def main() -> None:
         "max_steps": args.max_steps,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "world_size": world_size,
+        "device": device.type,
+        "distributed": accelerator.distributed_type.name,
         "learning_rate": args.learning_rate,
         "min_lr": args.min_lr,
         "warmup_ratio": args.warmup_ratio,

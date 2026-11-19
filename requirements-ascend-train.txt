@@ -1,0 +1,8 @@
+# Python packages for offline training and pruning on the CANN 9.2.1 stack.
+# Use the preinstalled CPU build of PyTorch with its matching Ascend plugin.
+torch==2.10.0+cpu
+torch-npu==2.10.0.post7
+transformers==4.57.3
+accelerate==1.12.0
+pandas==2.3.3
+pyarrow==22.0.0

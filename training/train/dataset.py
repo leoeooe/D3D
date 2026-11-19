@@ -304,7 +304,7 @@ def build_loader(
         ),
         "num_workers": num_workers,
         "drop_last": False,
-        "pin_memory": bool(args.pin_memory and torch.cuda.is_available()),
+        "pin_memory": bool(args.pin_memory and torch.accelerator.is_available()),
         "worker_init_fn": seed_worker if num_workers > 0 else None,
     }
     if num_workers > 0:

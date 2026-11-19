@@ -14,6 +14,7 @@ import torch
 from .common import atomic_write_json, load_selection_examples
 from .modeling import load_drafter, score_tokenized_examples
 from common.token_ids import checkpoint_mask_id
+from training.device import bind_device, default_device_type
 
 STEP_PATTERN = re.compile(r"step-(\d+)$")
 
@@ -31,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-samples", type=int, default=512)
     parser.add_argument("--block-size", type=int, default=16)
     parser.add_argument("--mask-token-id", type=int, default=None)
-    parser.add_argument("--devices", nargs="+", default=["cuda:0"])
+    parser.add_argument("--devices", nargs="+")
     return parser
 
 
@@ -62,7 +63,7 @@ def _score_worker(
     block_size: int,
     mask_token_id: int | None,
 ) -> list[dict[str, Any]]:
-    device = torch.device(device_name)
+    device = bind_device(device_name)
     rows = []
     for checkpoint in checkpoints:
         model = load_drafter(checkpoint, torch.bfloat16).to(device).eval()
@@ -77,12 +78,14 @@ def _score_worker(
             rows.append({"checkpoint": checkpoint, **score})
         del model
         gc.collect()
-        torch.cuda.empty_cache()
+        if device.type in {"cuda", "npu"}:
+            getattr(torch, device.type).empty_cache()
     return rows
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    args.devices = args.devices or [f"{default_device_type()}:0"]
     output = args.output_dir.resolve()
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite {output}")

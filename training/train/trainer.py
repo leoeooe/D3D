@@ -495,26 +495,32 @@ def main(
     if objective_requires_target(args.objective) and not args.target_model:
         raise ValueError(f"objective={args.objective} requires --target-model")
 
-    from accelerate import Accelerator
+    from training.device import training_accelerator, training_attention
 
     output_dir = Path(args.output_dir)
     fsdp_plugin = build_d3d_fsdp_plugin_from_args(args)
-    accelerator = Accelerator(
+    accelerator = training_accelerator(
+        args.device,
         mixed_precision=mixed_precision_from_dtype(args.dtype),
         project_dir=str(output_dir / "logs"),
         fsdp_plugin=fsdp_plugin,
     )
     ctx = distributed_context_from_accelerator(accelerator)
     device = accelerator.device
-    if torch.cuda.is_available():
-        torch.cuda.set_device(device)
+    args.device = device.type
+    args.attn_implementation = training_attention(args.attn_implementation, device.type)
+    distributed = {
+        "world_size": ctx.world_size,
+        "distributed_type": accelerator.distributed_type.name,
+        "backend": accelerator.state.backend,
+        "fsdp_version": 2 if accelerator.is_fsdp2 else None,
+    }
     random.seed(args.seed + ctx.rank)
     torch.manual_seed(args.seed + ctx.rank)
-    torch.cuda.manual_seed_all(args.seed + ctx.rank)
     if ctx.is_main:
         output_dir.mkdir(parents=True, exist_ok=True)
         with open(output_dir / "args.json", "w", encoding="utf-8") as f:
-            json.dump(vars(args) | {"world_size": ctx.world_size}, f, indent=2, sort_keys=True)
+            json.dump(vars(args) | distributed, f, indent=2, sort_keys=True)
     accelerator.wait_for_everyone()
 
     dtype = dtype_from_arg(args.dtype)
@@ -544,6 +550,8 @@ def main(
     if ctx.is_main:
         print(
             "[config] "
+            f"device={device} distributed={accelerator.distributed_type.name} "
+            f"backend={accelerator.state.backend} attention={args.attn_implementation} "
             f"objective={args.objective} draft={args.draft_model} target={args.target_model or '<not-loaded>'} "
             f"draft_code={args.draft_code_model or '<checkpoint>'} "
             f"trajectory_teacher={args.trajectory_teacher_model or '<not-loaded>'} "

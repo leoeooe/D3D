@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 
@@ -57,7 +58,7 @@ def parse_args(*, default_fix_mistral_regex: bool = False) -> argparse.Namespace
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--prefetch", type=int, default=2)
     parser.add_argument("--persistent-workers", action="store_true")
-    parser.add_argument("--pin-memory", action="store_true")
+    parser.add_argument("--pin-memory", action=argparse.BooleanOptionalAction)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--max-micro-steps", type=int, default=0)
     parser.add_argument("--save-every", type=int, default=200)
@@ -73,7 +74,14 @@ def parse_args(*, default_fix_mistral_regex: bool = False) -> argparse.Namespace
         "--dtype", choices=["bf16", "fp32"], default="bf16",
         help="Training supports BF16 or FP32. FP16 GradScaler training is not supported.",
     )
-    parser.add_argument("--attn-implementation", default="flash_attention_2")
+    parser.add_argument(
+        "--device", choices=["auto", "cuda", "npu"],
+        default=os.environ.get("D3D_TRAIN_DEVICE", "auto"),
+    )
+    parser.add_argument(
+        "--attn-implementation", default="auto",
+        help="auto selects SDPA on Ascend and FlashAttention-2 on CUDA",
+    )
     parser.add_argument("--gradient-checkpointing", action="store_true")
     parser.add_argument("--random-init", action="store_true")
     parser.add_argument("--mask-token", default="<MASK>")

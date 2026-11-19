@@ -23,6 +23,7 @@ case "$ACTION" in
         fi
         "${PY:-python}" -m torch.distributed.run \
             --standalone \
+            --local-addr 127.0.0.1 \
             --nproc_per_node "$NPROC" \
             --module training.pruning.train_recovery \
             "$@"

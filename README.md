@@ -226,8 +226,8 @@ Training code lives in `training/train/` and `training/pruning/`, including
 offline training on target-generated responses, layer selection, physical
 pruning, recovery training, and recovery-checkpoint selection.
 
-Use the **same environment** installed above with `requirements.txt` for
-training and native inference.
+For Ascend 910B and 910C, see the [Ascend training instructions](docs/training.md#ascend-910b-and-910c).
+The CUDA example below uses the same `requirements.txt` environment as native inference.
 
 ```bash
 export DRAFT_MODEL=checkpoints/Qwen3-1.7B
